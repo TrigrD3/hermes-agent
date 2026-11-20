@@ -589,8 +589,13 @@ async def api_auth_ws_ticket(request: Request):
     # On the gateway's Webapp the ticket carries the login's sign-in binding, so the socket it opens
     # closes at sign-out (``hermes_cli.webapp_sign_in``).
     signed_in = webapp_sign_in.sign_in_of(request)
+    extra = {"sign_in": signed_in} if signed_in else {}
+    # TRINET fork: the socket keeps the sign-in's profile scope (profile_access.py).
+    from hermes_cli.dashboard_auth.profile_access import allowed_profiles
+    if (allowed := allowed_profiles(sess)) is not None:
+        extra["profile_access"] = list(allowed)
     ticket = mint_ticket(user_id=sess.user_id, provider=sess.provider, issuer=sess.issuer,
-                         extra={"sign_in": signed_in} if signed_in else None)
+                         extra=extra or None)
     _audit(request, AuditEvent.WS_TICKET_MINTED, provider=sess.provider, user_id=sess.user_id)
     return {"ticket": ticket, "ttl_seconds": TTL_SECONDS}
 

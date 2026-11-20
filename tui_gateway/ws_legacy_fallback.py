@@ -151,6 +151,28 @@ def _own_profile_read(server: Any, req: dict, home: str) -> dict:
     return {"jsonrpc": "2.0", "id": req.get("id"), "result": {"sessions": rows}}
 
 
+def dispatch_profile_restricted(server: Any, req: dict, transport: Any, allowed: tuple[str, ...]) -> dict | None:
+    """TRINET fork: a dashboard sign-in scoped to *allowed* (``profile_access.py``) on a socket with no
+    authority. An explicit ``profile`` must be allowed; any other request runs in the first allowed
+    profile, exactly as a ticket bound to that home does (:func:`dispatch_legacy`)."""
+    from types import SimpleNamespace
+
+    from hermes_cli.dashboard_auth.profile_access import is_allowed
+    from hermes_cli.isolated_scope import restrict_request_profiles
+    params = req.get("params") if isinstance(req.get("params"), dict) else {}
+    explicit = params.get("profile")
+    if not allowed or not is_allowed(explicit, allowed):
+        return _unavailable(req)
+    implicit = str(explicit or "").strip().lower() in {"", "current", "all"}
+    try:
+        home = server._profile_home(allowed[0] if implicit else str(explicit))
+    except (OSError, ValueError):
+        return _unavailable(req)
+    actor = SimpleNamespace(profile_id=str(home or server._launch_home()))
+    with restrict_request_profiles(allowed):
+        return dispatch_legacy(server, req, transport, actor)
+
+
 def dispatch_legacy(server: Any, req: dict, transport: Any, actor: Any) -> dict | None:
     """Run ``server.dispatch`` with the ticket's profile home bound (call from a worker thread;
     the pool path copies this context, so long handlers see it too)."""

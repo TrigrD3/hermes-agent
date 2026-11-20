@@ -31,7 +31,7 @@ from fastapi import APIRouter, HTTPException, Query
 from hermes_cli.session_listing import subagent_listing_scope
 from hermes_cli.web_deps import late
 from hermes_cli.config import get_process_hermes_home
-from hermes_cli.isolated_scope import scope_to_launch_profile
+from hermes_cli.isolated_scope import request_profiles, scope_to_launch_profile
 from hermes_cli.profiles import ProfileIdentitySettlementPending
 from hermes_cli.web_server_gateway import _strip_session_list_rows
 from hermes_cli.web_server_profiles import (
@@ -809,7 +809,12 @@ async def get_active_profile_endpoint():
         return {"active": _or_default(profiles_mod.get_active_profile),
                 "current": _or_default(profiles_mod.get_active_profile_name, on_error="custom")}
 
-    return await run_in_threadpool(_run)
+    result = await run_in_threadpool(_run)
+    # TRINET fork: a scoped sign-in starts in, and only ever sees, its own profiles.
+    allowed = request_profiles()
+    if allowed:
+        result = {key: value if value in allowed else allowed[0] for key, value in result.items()}
+    return result
 
 
 @router.post("/api/profiles/active")

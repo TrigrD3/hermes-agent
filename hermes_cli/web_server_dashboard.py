@@ -221,7 +221,12 @@ def mount_spa(application: FastAPI):
         token_js = "" if withheld else f'window.__HERMES_SESSION_TOKEN__="{_server()._SESSION_TOKEN}";'
         # Launcher-preselected profile (``--open-profile``): the SPA's fallback scope when the URL
         # omits ``?profile=`` (#73085). ``</`` escaped so a hostile name cannot close the script tag.
-        initial_profile_js = json.dumps(str(getattr(application.state, "initial_profile", "") or "")).replace("</", "<\\/")
+        initial_profile = str(getattr(application.state, "initial_profile", "") or "")
+        # TRINET fork: a scoped sign-in opens on its own default profile (profile_access.py).
+        from hermes_cli.dashboard_auth.profile_access import allowed_profiles
+        if allowed := allowed_profiles(getattr(request.state, "session", None)):
+            initial_profile = allowed[0]
+        initial_profile_js = json.dumps(initial_profile).replace("</", "<\\/")
         # This backend's OWN profile name (empty when it cannot be named unambiguously). The SPA
         # falls back to it when neither the URL nor --open-profile names one, so requests carry an
         # explicit scope from the first paint: destructive routes 400 on an unnamed profile as soon

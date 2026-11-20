@@ -16,11 +16,30 @@ profile by ``?profile=``) stay unscoped.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Iterable, Optional, TypeVar
 
 T = TypeVar("T")
 
 _LAUNCH_PROFILE: Optional[str] = None
+# TRINET fork: the profiles one signed-in user may list (dashboard_auth/profile_access.py).
+_REQUEST_PROFILES: ContextVar[Optional[tuple[str, ...]]] = ContextVar("hermes_request_profiles", default=None)
+
+
+@contextmanager
+def restrict_request_profiles(names: Optional[tuple[str, ...]]):
+    """Narrow every listing in this context to *names* (``None`` = no narrowing)."""
+    token = _REQUEST_PROFILES.set(None if names is None else tuple(names))
+    try:
+        yield
+    finally:
+        _REQUEST_PROFILES.reset(token)
+
+
+def request_profiles() -> Optional[tuple[str, ...]]:
+    """The signed-in user's profiles, default first, or None when the request is unrestricted."""
+    return _REQUEST_PROFILES.get()
 
 
 def record_launch_scope(*, isolated: bool, desktop_owned: bool) -> Optional[str]:
@@ -43,5 +62,6 @@ def isolated_launch_profile() -> Optional[str]:
 
 def scope_to_launch_profile(items: Iterable[T], name_of=lambda item: item) -> list[T]:
     """``items`` narrowed to the launch profile on an isolated backend; unchanged otherwise."""
-    scope = _LAUNCH_PROFILE
-    return [item for item in items if scope is None or name_of(item) == scope]
+    scope, allowed = _LAUNCH_PROFILE, _REQUEST_PROFILES.get()
+    return [item for item in items if (scope is None or name_of(item) == scope)
+            and (allowed is None or name_of(item) in allowed)]

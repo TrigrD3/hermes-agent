@@ -19,6 +19,7 @@ class Session:
     access_token: str
     refresh_token: str
     issuer: str = ""  # Verified issuer; empty for non-federated providers.
+    groups: tuple[str, ...] = ()  # TRINET fork: verified IdP groups (profile_access.py).
 
 
 @dataclass(frozen=True)

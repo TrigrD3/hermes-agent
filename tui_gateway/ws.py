@@ -20,7 +20,7 @@ from tui_gateway import server
 from agent.message_sanitization import _sanitize_surrogates
 from tui_gateway.event_replay import replay_epoch
 from tui_gateway.transport import serialize_frame
-from tui_gateway.ws_legacy_fallback import dispatch_legacy, legacy_fallback_allowed
+from tui_gateway.ws_legacy_fallback import dispatch_legacy, dispatch_profile_restricted, legacy_fallback_allowed
 
 _log = logging.getLogger(__name__)
 
@@ -398,6 +398,10 @@ async def _dispatch_request(authority_connection: Any, req: Any, req_method: Any
         return None
     with serving_local_desktop(getattr(transport, "desktop_local", False)):
         if authority_connection is None:
+            allowed = (transport.auth_identity or {}).get("profile_access")
+            if allowed is not None and isinstance(req, dict):  # TRINET fork: profile_access.py
+                return await asyncio.to_thread(
+                    dispatch_profile_restricted, server, req, transport, tuple(allowed))
             return await asyncio.to_thread(server.dispatch, req, transport)
         resp = await authority_connection.dispatch(req)
         actor = authority_connection.actor

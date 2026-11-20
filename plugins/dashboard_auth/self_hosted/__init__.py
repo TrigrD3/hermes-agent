@@ -13,6 +13,7 @@ for the ID token's time claims, ``0`` restores strict verification).
 from __future__ import annotations
 
 import base64
+import dataclasses
 import logging
 import threading
 import time
@@ -280,10 +281,14 @@ class SelfHostedOIDCProvider(JwtOAuthProvider):
         groups = claims.get("groups")
         if not org_id and isinstance(groups, list) and groups:
             org_id = ",".join(str(g) for g in groups)
-        return session_from_claims(
+        session = session_from_claims(
             self.name, claims, access_token=id_token, refresh_token=refresh_token, label="ID token", email=email,
             display_name=str(claims.get("name") or claims.get("preferred_username") or claims.get("nickname") or email or ""),
             org_id=str(org_id or ""))
+        # TRINET fork: Keycloak's "full group path" form is "/name"; keep the bare name.
+        if isinstance(groups, list):
+            session = dataclasses.replace(session, groups=tuple(str(g).lstrip("/") for g in groups if str(g).strip()))
+        return session
 
 
 # ---- Plugin entry point ----

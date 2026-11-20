@@ -331,6 +331,10 @@ def _ws_auth_reason(ws: WebSocket, *, allow_internal: bool = False,
                     "user_id": getattr(session, "user_id", None),
                     "provider": getattr(session, "provider", None),
                 })
+                # TRINET fork: the socket keeps the sign-in's profile scope (profile_access.py).
+                from hermes_cli.dashboard_auth.profile_access import allowed_profiles
+                if (allowed := allowed_profiles(session)) is not None:
+                    ws._hermes_auth_identity["profile_access"] = list(allowed)
                 audit_log(
                     AuditEvent.TOKEN_AUTH_SUCCESS,
                     provider=getattr(session, "provider", None),
@@ -407,6 +411,8 @@ def _consume_ws_ticket(ws: WebSocket, reject, socket: Optional[str] = None, *,
     ws._hermes_auth_identity = {"user_id": info.get("user_id"), "provider": info.get("provider")}
     if info.get("issuer"):
         ws._hermes_auth_identity["issuer"] = info["issuer"]
+    if "profile_access" in info:  # TRINET fork: minted by /api/auth/ws-ticket (profile_access.py)
+        ws._hermes_auth_identity["profile_access"] = list(info["profile_access"])
     if info.get("profile_home"):
         ws._hermes_ticket_profile_home = info["profile_home"]
     if (admitted := admitted_with(info)) is not None:

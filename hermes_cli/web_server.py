@@ -446,6 +446,14 @@ app.add_middleware(PluginApiWebSocketGate)
 
 
 @app.middleware("http")
+async def _profile_access_gate(request: Request, call_next):
+    """TRINET fork: scope an IdP sign-in to its mapped profiles. Registered before the auth gate
+    so it runs after it, once ``request.state.session`` is set (dashboard_auth/profile_access.py)."""
+    from hermes_cli.dashboard_auth.profile_access import profile_access_middleware
+    return await profile_access_middleware(request, call_next)
+
+
+@app.middleware("http")
 async def _dashboard_auth_gate(request: Request, call_next):
     """OAuth gate — active only when start_server flags ``auth_required``; pass-through on loopback.
 

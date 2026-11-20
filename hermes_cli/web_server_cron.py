@@ -274,9 +274,11 @@ def _mutate_cron_for_profile(target_profile: Optional[str], func_name: str, *arg
 
 
 def _find_cron_job_profile(job_id: str) -> Optional[str]:
+    from hermes_cli.isolated_scope import request_profiles
+    allowed = request_profiles()  # TRINET fork: a scoped sign-in finds only its own jobs
     for profile in _cron_profile_dicts():
         name = str(profile.get("name") or "")
-        if not name:
+        if not name or (allowed is not None and name not in allowed):
             continue
         jobs = _call_cron_for_profile(name, "list_jobs", True)
         if any(j.get("id") == job_id or j.get("name") == job_id for j in jobs):

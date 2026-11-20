@@ -17,6 +17,8 @@ from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisco
 
 from agent.interrupt_scope import InterruptScope, bind_interrupt_scope
 from hermes_cli.active_sessions import ActiveSessionRegistryError, active_session_registry_snapshot
+from hermes_cli.dashboard_auth.profile_access import is_allowed, ws_allowed, ws_profile
+from hermes_constants import profile_name_for_home
 from hermes_cli.pty_session import RegistryFull
 from hermes_cli.web_deps import LateState, late
 from hermes_cli.web_server_chat import (
@@ -248,6 +250,11 @@ async def console_ws(ws: WebSocket) -> None:
 
     profile = (ws.query_params.get("profile") or "").strip() or None
     out = _ConsoleSender(ws)
+    try:  # TRINET fork: a scoped sign-in opens only its own profiles (profile_access.py)
+        profile = ws_profile(ws, profile)
+    except PermissionError:
+        await ws.close(code=4403, reason="profile_access_denied")
+        return
 
     try:
         from hermes_cli.console_engine import HermesConsoleEngine
@@ -497,6 +504,11 @@ async def pty_ws(ws: WebSocket) -> None:
     raw_resume = ws.query_params.get("resume") or None
     resume = raw_resume
     profile = ws.query_params.get("profile") or None
+    try:  # TRINET fork: a scoped sign-in opens only its own profiles (profile_access.py)
+        profile = ws_profile(ws, profile)
+    except PermissionError:
+        await ws.close(code=4403, reason="profile_access_denied")
+        return
     channel = _channel_or_close_code(ws)
     sidecar_url = _build_sidecar_url(channel) if channel else None
     force_fresh = (ws.query_params.get("fresh") or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -670,7 +682,17 @@ async def gateway_ws(ws: WebSocket) -> None:
                     'profile_id': authority.profile_id, 'instance_id': authority.instance_id,
                     'capabilities': ['session:create', 'session:read', 'session:submit',
                                      'session:control', 'session:approve', 'session:respond']}
-    if identity is not None:
+    allowed = ws_allowed(ws)
+    if allowed is not None:
+        # TRINET fork: a scoped sign-in is no host-wide operator. With no authority (the standalone
+        # dashboard) every request is checked in ``dispatch_profile_restricted``; an authority
+        # serves only its own profile to a non-host grant, so it must be one the user holds.
+        if not allowed or (authority is not None and not is_allowed(
+                profile_name_for_home(authority.profile_id), allowed, implicit_ok=False)):
+            await ws.close(code=4403)
+            return
+        identity = {**(identity or {}), 'profile_scope': 'profile'}
+    elif identity is not None:
         # The dashboard gate authorizes the whole host (its REST routes take ``?profile=`` for
         # every profile), so its socket may select any served sibling too.
         identity = {**identity, 'profile_scope': 'host'}
