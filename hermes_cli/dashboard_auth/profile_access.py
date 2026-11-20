@@ -9,6 +9,8 @@ user keeps upstream's whole-host access::
           admin_groups: [hermes-admin]      # see and manage every profile
           groups:                           # IdP group -> profiles; the first one listed is the default
             marketing-writers: [penulis]
+          plugins:                          # dashboard plugin -> the groups that may use it (admins always)
+            marketing: [marketing-writers]
 
 A user in no listed group gets no profile. This is dashboard scoping, NOT isolation: profiles share
 one OS user, so a shell or an agent tool can still read every profile (``isolated_scope.py``).
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import parse_qsl, urlencode
@@ -24,6 +27,7 @@ from urllib.parse import parse_qsl, urlencode
 from starlette.responses import JSONResponse
 
 _log = logging.getLogger(__name__)
+_DENIED_PLUGINS: ContextVar[frozenset] = ContextVar("hermes_denied_plugins", default=frozenset())
 
 #: Providers whose sessions are the operator's own credential, never a person to scope.
 _UNSCOPED_PROVIDERS = frozenset({"session-token"})
@@ -86,6 +90,29 @@ def allowed_profiles(session: Any) -> Optional[tuple[str, ...]]:
         if str(group) in groups:
             allowed.extend(n for n in _names(profiles) if n not in allowed)
     return tuple(allowed)
+
+
+def denied_plugins(session: Any) -> frozenset:
+    """Plugins listed under ``profile_access.plugins`` that *session* is in none of the groups for."""
+    if allowed_profiles(session) is None:
+        return frozenset()
+    try:
+        plugins = _policy().get("plugins")
+    except _PolicyUnreadable:
+        return frozenset()  # allowed_profiles already refused every gated call
+    groups = set(getattr(session, "groups", ()) or ())
+    return frozenset(str(name) for name, allowed in (plugins if isinstance(plugins, dict) else {}).items()
+                     if not groups & set(_names_raw(allowed)))
+
+
+def request_denied_plugins() -> frozenset:
+    """The plugins this request's sign-in may not use (the dashboard's tab list hides them)."""
+    return _DENIED_PLUGINS.get()
+
+
+def plugin_name(path: str) -> str:
+    parts = path.split("/")  # ['', 'api', 'plugins', '<name>', ...]
+    return parts[3] if path.startswith("/api/plugins/") and len(parts) >= 4 else ""
 
 
 def _names_raw(values: Any) -> list[str]:
@@ -184,17 +211,24 @@ async def profile_access_middleware(request: Any, call_next):
     allowed = allowed_profiles(session)
     if allowed is None or not request.url.path.startswith("/api/"):
         return await call_next(request)
+    denied = denied_plugins(session)
     try:
         await check_request(request, allowed, public=public)
+        if plugin_name(request.url.path) in denied:
+            raise PermissionError("plugin_access_denied")
     except PermissionError:
         return JSONResponse({"detail": "profile_access_denied"}, status_code=403)
     request.state.profile_access = allowed
+    denied_token = _DENIED_PLUGINS.set(denied)
     host_level = request.url.path.startswith(_HOST_LEVEL_PATHS)
     if host_level:  # already checked above; dropped so the plugin runs on the launch profile's copy
         query = parse_qsl(request.scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
         request.scope["query_string"] = urlencode([(k, v) for k, v in query if k != "profile"]).encode("latin-1")
-    with request_scope(allowed, bind_home=not host_level):
-        return await call_next(request)
+    try:
+        with request_scope(allowed, bind_home=not host_level):
+            return await call_next(request)
+    finally:
+        _DENIED_PLUGINS.reset(denied_token)
 
 
 # ---- WebSockets: the scope rides the server-minted identity (ticket ``extra`` / token leg) ----
@@ -203,6 +237,12 @@ def ws_allowed(ws: Any) -> Optional[tuple[str, ...]]:
     """The profile scope stamped on *ws* at upgrade auth, or ``None`` (unrestricted)."""
     access = (getattr(ws, "_hermes_auth_identity", None) or {}).get("profile_access")
     return None if access is None else tuple(access)
+
+
+def ws_plugin_denied(ws: Any) -> bool:
+    """True for a plugin socket whose plugin the stamped sign-in may not use."""
+    denied = (getattr(ws, "_hermes_auth_identity", None) or {}).get("denied_plugins") or ()
+    return bool(denied) and plugin_name(getattr(getattr(ws, "url", None), "path", "") or "") in denied
 
 
 def ws_profile(ws: Any, requested: Optional[str]) -> Optional[str]:

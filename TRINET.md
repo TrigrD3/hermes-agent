@@ -14,6 +14,8 @@ dashboard:
       admin_groups: [hermes-admin]   # see and manage every profile
       groups:                        # Keycloak group -> profiles; the first listed is the user's default
         marketing-writers: [penulis]
+      plugins:                       # optional: dashboard plugin -> groups that may use it (admins always)
+        marketing: [marketing-writers]
 ```
 
 - No `profile_access` block: upstream behaviour, every signed-in user sees every profile.
@@ -33,6 +35,7 @@ dashboard:
 | First page load (`__HERMES_INITIAL_PROFILE__`) | opens on the user's default profile |
 | `/api/plugins/*`, `GET /api/dashboard/plugins` | run on the launch profile's plugin copy; the plugin scopes itself with `isolated_scope.request_profiles()` |
 | Installing, hiding or updating plugins | admin only |
+| A plugin listed under `profile_access.plugins` | only those groups (and admins): tab hidden, API 403, plugin sockets refused |
 | Create / rename / delete / import profiles, set the sticky active profile | admin only |
 | `/api/pty` (Chat tab), `/api/console` | open only the user's profiles (close 4403) |
 | `/api/ws` (gateway JSON-RPC) | explicit other profile → refused; else the default profile |

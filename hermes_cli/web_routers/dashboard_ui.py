@@ -118,8 +118,10 @@ async def get_dashboard_plugins(profile: Optional[str] = None):
                 if p.get("name", "") not in hidden and not _plugin_consent_withheld(p)]
 
     # Strip internal fields before sending to frontend.
+    from hermes_cli.dashboard_auth.profile_access import request_denied_plugins
+    denied = request_denied_plugins()  # TRINET fork: plugins this sign-in's groups may not use
     return [{k: v for k, v in p.items() if not k.startswith("_")}
-            for p in await config_scoped_to_thread(profile, _run)]
+            for p in await config_scoped_to_thread(profile, _run) if p.get("name", "") not in denied]
 
 
 @router.get("/api/dashboard/plugins/rescan")

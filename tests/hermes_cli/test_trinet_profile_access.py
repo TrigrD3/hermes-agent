@@ -273,3 +273,49 @@ def test_real_app_scopes_a_signed_in_user(profiles, monkeypatch):
     assert client.get("/api/profiles/perencana/soul").status_code == 403
     ticket = client.post("/api/auth/ws-ticket").json()["ticket"]
     assert consume_ticket(ticket)["profile_access"] == ["penulis"]
+
+
+PLUGIN_POLICY = {"admin_groups": ["hermes-admin"],
+                 "groups": {"hermes-marketing": ["penulis"], "hermes-perencana": ["perencana"]},
+                 "plugins": {"marketing": ["hermes-marketing"], "kanban": ["hermes-marketing"]}}
+
+
+def test_plugins_are_withheld_from_groups_not_listed(monkeypatch):
+    monkeypatch.setattr(pa, "_policy", lambda: PLUGIN_POLICY)
+    assert pa.denied_plugins(_session("hermes-perencana")) == {"marketing", "kanban"}
+    assert pa.denied_plugins(_session("hermes-marketing")) == frozenset()
+    assert pa.denied_plugins(_session("hermes-admin")) == frozenset()
+
+
+def test_real_app_hides_and_refuses_withheld_plugins(profiles, monkeypatch):
+    (profiles / "config.yaml").write_text(
+        "dashboard:\n  oauth:\n    profile_access:\n      groups:\n        hermes-perencana: [perencana]\n"
+        "      plugins:\n        kanban: [hermes-marketing]\n", encoding="utf-8")
+    from hermes_cli.dashboard_auth import middleware as gate
+    from hermes_cli.dashboard_auth.ws_tickets import consume_ticket
+    from hermes_cli.web_server import app
+
+    async def signed_in(request, call_next):
+        request.state.session = _session("hermes-perencana")
+        return await call_next(request)
+
+    from hermes_cli import web_server
+    from hermes_cli.web_routers import dashboard_ui
+    monkeypatch.setattr(web_server, "_get_dashboard_plugins", lambda: [{"name": "kanban"}, {"name": "marketing"}])
+    monkeypatch.setattr(dashboard_ui, "_plugin_consent_withheld", lambda p: False)
+    monkeypatch.setattr(gate, "gated_auth_middleware", signed_in)
+    monkeypatch.setattr(app.state, "auth_required", True, raising=False)
+    client = TestClient(app)
+    assert client.get("/api/plugins/kanban/board").status_code == 403
+    assert [p["name"] for p in client.get("/api/dashboard/plugins").json()] == ["marketing"]
+    ticket = client.post("/api/auth/ws-ticket").json()["ticket"]
+    assert consume_ticket(ticket)["denied_plugins"] == ["kanban"]
+
+
+def test_plugin_socket_refused_for_withheld_plugin():
+    ws = SimpleNamespace(url=SimpleNamespace(path="/api/plugins/kanban/events"),
+                         _hermes_auth_identity={"user_id": "u1", "denied_plugins": ["kanban"]})
+    assert pa.ws_plugin_denied(ws)
+    ws.url.path = "/api/plugins/marketing/events"
+    assert not pa.ws_plugin_denied(ws)
+    assert not pa.ws_plugin_denied(SimpleNamespace(_hermes_auth_identity={}))

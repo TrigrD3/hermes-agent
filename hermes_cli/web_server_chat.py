@@ -332,9 +332,11 @@ def _ws_auth_reason(ws: WebSocket, *, allow_internal: bool = False,
                     "provider": getattr(session, "provider", None),
                 })
                 # TRINET fork: the socket keeps the sign-in's profile scope (profile_access.py).
-                from hermes_cli.dashboard_auth.profile_access import allowed_profiles
+                from hermes_cli.dashboard_auth.profile_access import allowed_profiles, denied_plugins
                 if (allowed := allowed_profiles(session)) is not None:
                     ws._hermes_auth_identity["profile_access"] = list(allowed)
+                if denied := denied_plugins(session):
+                    ws._hermes_auth_identity["denied_plugins"] = sorted(denied)
                 audit_log(
                     AuditEvent.TOKEN_AUTH_SUCCESS,
                     provider=getattr(session, "provider", None),
@@ -411,8 +413,9 @@ def _consume_ws_ticket(ws: WebSocket, reject, socket: Optional[str] = None, *,
     ws._hermes_auth_identity = {"user_id": info.get("user_id"), "provider": info.get("provider")}
     if info.get("issuer"):
         ws._hermes_auth_identity["issuer"] = info["issuer"]
-    if "profile_access" in info:  # TRINET fork: minted by /api/auth/ws-ticket (profile_access.py)
-        ws._hermes_auth_identity["profile_access"] = list(info["profile_access"])
+    for key in ("profile_access", "denied_plugins"):  # TRINET fork: minted by /api/auth/ws-ticket
+        if key in info:
+            ws._hermes_auth_identity[key] = list(info[key])
     if info.get("profile_home"):
         ws._hermes_ticket_profile_home = info["profile_home"]
     if (admitted := admitted_with(info)) is not None:
@@ -427,7 +430,11 @@ def _consume_ws_ticket(ws: WebSocket, reject, socket: Optional[str] = None, *,
 
 def _ws_auth_ok(ws: WebSocket, *, allow_internal: bool = False, socket: Optional[str] = None) -> bool:
     """True when the WS-upgrade credential is accepted. See _ws_auth_reason."""
-    return _ws_auth_reason(ws, allow_internal=allow_internal, socket=socket)[0] is None
+    if _ws_auth_reason(ws, allow_internal=allow_internal, socket=socket)[0] is not None:
+        return False
+    # TRINET fork: a plugin socket (kanban /events) refuses a sign-in its plugin is withheld from.
+    from hermes_cli.dashboard_auth.profile_access import ws_plugin_denied
+    return not ws_plugin_denied(ws)
 
 
 def _ws_auth_mode() -> str:

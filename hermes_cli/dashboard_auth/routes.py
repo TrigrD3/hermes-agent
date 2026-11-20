@@ -591,9 +591,11 @@ async def api_auth_ws_ticket(request: Request):
     signed_in = webapp_sign_in.sign_in_of(request)
     extra = {"sign_in": signed_in} if signed_in else {}
     # TRINET fork: the socket keeps the sign-in's profile scope (profile_access.py).
-    from hermes_cli.dashboard_auth.profile_access import allowed_profiles
+    from hermes_cli.dashboard_auth.profile_access import allowed_profiles, denied_plugins
     if (allowed := allowed_profiles(sess)) is not None:
         extra["profile_access"] = list(allowed)
+    if denied := denied_plugins(sess):
+        extra["denied_plugins"] = sorted(denied)
     ticket = mint_ticket(user_id=sess.user_id, provider=sess.provider, issuer=sess.issuer,
                          extra=extra or None)
     _audit(request, AuditEvent.WS_TICKET_MINTED, provider=sess.provider, user_id=sess.user_id)
